@@ -1,0 +1,19 @@
+# docker-compose up --build
+version: '3.10'
+
+services:
+  redis:
+    image: redis
+    container_name: csgo_redis_db
+    command: --port 6398
+    expose:
+      - 6398
+  app:
+    platform: linux/amd64
+    build:
+      context: .
+    container_name: csgo_app
+    env_file:
+      - .env
+    depends_on:
+      - redis
