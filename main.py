@@ -49,9 +49,8 @@ if __name__ == '__main__':
 
     print("--------------------------------------------")
     process_one.start()
-    print("Start process ON_SALE")
+    print("Start process ON_SALE and HISTORY in different parallel process")
     process_two.start()
-    print("Start process HISTORY")
 
     print("-------------------2 and 3 STAGE-----------------")
 
