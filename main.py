@@ -1,31 +1,43 @@
+import logging
 from market.on_sale import main_on_sale
 from market.history import main_history
 from database.services import insert_market_hash_names
 import multiprocessing as mp
 import time
+import asyncio
 
+# configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S', filename='market_hash_names.log',
+    filemode='a')
+
+# Start time of start project
 START = time.time()
 
-KEYS = ['vCkVaFAV7rrFGOX5xTE6zsu27t36g9N', '4DsygAaKoCRDAs2jX9o3Gcx68gq34oX', 'vXJ7sFz4nsuc7fT81RNqIkrj7y06m14',
-        'UAYvjQAX5U7Lu0GjHcovE3f5Yf8lsEA', '00Evwqok5v459W3CsG1uwBnOV7vG7I6', 'yREZeeZN2pZAKnhDKEUi2gtY5xxtDoU',
-        'NDJSqIbxf0zCNE9yYSh35iHHxxMFzz7', '1KAEe664V41vorlgd6kG9hx17g5y6F0', 'w522SCV09kFqLyH02RCRK18kbauVhCL',
-        'jwqZ69qF3UMfcfRdyj3cBpqT403WZ36']
+# List of keys for request
+with open("keys.txt", "r") as keys_file:
+    KEYS = keys_file.read().splitlines()
 
-# Размер пачки хэшей
+# Size chenk hashes
 CHUNK_SIZE = 50
 
-# Создаем список для хранения пачек хэшей и имен подсписков
+# List for storing chunk hashes and sublist
 HASH_CHUNKS = []
 
-# Индекс текущего ключа в списке keys
+# Index current key in list
 KEY_INDEX = 0
 
-DATA_ON_SALES = dict()
+# Create global variable dictionary fot iteration and add to DB through one session
+DATA_SALES = dict()
 DATA_HISTORY = dict()
 
-data = insert_market_hash_names()
-market_hash_names = data['market_hash_names']
+# Run func for get data=market_hash_names from redis
+market_hash_names = insert_market_hash_names()
+market_hash_names = market_hash_names['market_hash_names']
 
+# Iterate and create HASH_CHUNKS with the list into sublists of 50 item
 for i in range(0, len(market_hash_names), CHUNK_SIZE):
     key = KEYS[KEY_INDEX]
     hash_chunk = list(market_hash_names.items())[i:i + CHUNK_SIZE]
@@ -33,33 +45,51 @@ for i in range(0, len(market_hash_names), CHUNK_SIZE):
     KEY_INDEX = (KEY_INDEX + 1) % len(KEYS)
 
 
+# Define func for process #1 Stage ON_SALE
 def run_main_on_sale():
-    main_on_sale(hash_chunks=HASH_CHUNKS, data_on_sales=DATA_ON_SALES)
+    logging.info('Starting process ON_SALE')
+    asyncio.run(
+        main_on_sale(hash_chunks=HASH_CHUNKS, data_on_sales=DATA_SALES))
+    logging.info('Finished process ON_SALE')
 
 
+# Define func for process #2 Stage HISTORY
 def run_main_on_history():
-    main_history(hash_chunks=HASH_CHUNKS, data_history=DATA_HISTORY)
+    logging.info('Starting process HISTORY')
+    asyncio.run(
+        main_history(hash_chunks=HASH_CHUNKS, data_history=DATA_HISTORY))
+    logging.info('Finished process HISTORY')
 
 
+# Entrypoint of program
 if __name__ == '__main__':
-    print("-------------------1 STAGE-----------------")
+    logging.info('Starting program...')
+    logging.info(f'From API got {len(market_hash_names)} market_hash_names')
+
+    print("\n\n=============================================")
+    print("-------------------1 STAGE-----------------------")
     print(f"From API got {len(market_hash_names)} market_hash_names")
     process_one = mp.Process(target=run_main_on_sale)
     process_two = mp.Process(target=run_main_on_history)
 
-    print("--------------------------------------------")
-    process_one.start()
+    print("--------------------------------------------------")
     print("Start process ON_SALE and HISTORY in different parallel process")
+    logging.info('Start process ON_SALE and HISTORY in different parallel process')
+    process_one.start()
     process_two.start()
 
-    print("-------------------2 and 3 STAGE-----------------")
+    print("\n\n-------------------2 and 3 STAGE-------------------\n")
 
     process_one.join()
     process_two.join()
 
+    logging.info('Starting process СOMPARE DATA')
     from market import compare
 
+    logging.info('Finished process СOMPARE DATA')
+
     elapsed_script_time = time.time() - START
-    print("--------------------------------------------")
+    logging.info('Total time elapsed: %s seconds', elapsed_script_time)
+    print("____________________________________________________")
     print("Total time elapsed:", elapsed_script_time, "seconds")
-    print("=============================================")
+    print("====================================================\n")

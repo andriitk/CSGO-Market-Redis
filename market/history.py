@@ -1,66 +1,103 @@
-import requests
+# import requests
+import asyncio
+import aiohttp
 import urllib.parse
 from database.services import add_data_history, get_data
-# import hashlib
-import concurrent.futures
+# import concurrent.futures
 import datetime
-import json
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S', filename='market_hash_names.log',
+    filemode='a')
 
 
-# hash_object = hashlib.sha256()
-
-
-def fetch_data_history(data_history: dict, key, hash_chunk):
+async def fetch_data_history(data_history: dict, key, hash_chunk, session):
     tail = ''
     for block in hash_chunk:
         tail += '&list_hash_name[]=' + urllib.parse.quote(block[0])
     url = f"https://market.csgo.com/api/v2/get-list-items-info?key={key}{tail}"
 
     try:
-        response = requests.get(url, timeout=120)
-        data = response.json()
+        async with session.get(url) as response:
+            status_code = response.status
+            data = await response.json()
 
-    except json.decoder.JSONDecodeError:
-        pass
-    except Exception as ex:
-        print(f"Error with resource available - ConnectTimeOut. Skip {len(hash_chunk)} chunks in HISTORY stage")
-
-    finally:
-        if response.status_code in range(100, 400):
             for name, items in data['data'].items():
-                try:
-                    prices = []
-                    for block in items['history']:
-                        if "." not in str(block[1]):
-                            prices.append(str(block[1]) + ".0")
-                        else:
-                            prices.append(str(block[1]))
+                prices = set()
+                for block in items['history']:
+                    if "." not in str(block[1]):
+                        prices.add(f"{block[1]}.0")
+                    else:
+                        prices.add(str(block[1]))
 
-                    # hash_object.update(json.dumps({name: items['history']}).encode())
-                    data_history.update({json.dumps({name: items['history']}): {"market_hash_name": name,
-                                                                                "times": [
-                                                                                    str(datetime.datetime.fromtimestamp(
-                                                                                        int(block[0])))
-                                                                                    for block in
-                                                                                    items['history']],
-                                                                                "price": prices,
-                                                                                "time": datetime.datetime.now(),
-                                                                                "status": "need_check"
-                                                                                }})
-                except Exception as e:
-                    print(f"Error while inserting data into added to general HISTORY list: {e}")
+                data_history[name] = {"time": [
+                    str(datetime.datetime.fromtimestamp(
+                        int(block[0])))
+                    for
+                    block in
+                    items['history']],
+                    "price": list(prices),
+                    "status": "need_check",
+                    "created_at": datetime.datetime.now()}
+
+    except aiohttp.client_exceptions.ContentTypeError as ex:
+        print(f"[!] Exception - HISTORY: ConnectError. Status code: {status_code}")
+        logging.error(
+            f"[!] Exception - HISTORY - ConnectError. "
+            f"Skip {len(hash_chunk)} chunks in HISTORY stage. Status code: {status_code}")
+
+    except Exception as ex:
+        print(f"[!] Exception - HISTORY: {ex}. Status code: {status_code}")
+        logging.error(
+            f"[!] Exception - HISTORY - {ex}. "
+            f"Skip {len(hash_chunk)} chunks in HISTORY stage. Status code: {status_code}")
 
 
-def main_history(hash_chunks: list, data_history: dict):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        for index, hash_chunk in enumerate(hash_chunks):
-            key = hash_chunk[0]
-            hash_chunk = hash_chunk[1]
+# ASYNCIO
+async def main_history(hash_chunks: list, data_history: dict):
+    print(asyncio.get_event_loop())
+    async with aiohttp.ClientSession() as session:
+        tasks = [asyncio.create_task(
+            fetch_data_history(data_history=data_history, key=hash_chunk[0], hash_chunk=hash_chunk[1], session=session))
+            for index, hash_chunk in enumerate(hash_chunks)]
 
-            executor.submit(fetch_data_history, data_history=data_history, key=key,
-                            hash_chunk=hash_chunk)
+        await asyncio.gather(*tasks)
 
-    print(f"Amount elements on all iterations: {len(data_history)}")
+    logging.info("Start inserted data to HISTORY DB")
+    print("Start inserted data to HISTORY DB")
 
     add_data_history(table="history", data=data_history)
+
+    logging.info(f"Amount elements on all iterations in HISTORY stage: {len(data_history)}")
+    logging.info(f"Now HISTORY DB is storing: {len(get_data(table='history', db=2))} records")
+
+    print(f"Amount elements on all iterations in HISTORY stage: {len(data_history)}")
     print(f"Now HISTORY DB is storing: {len(get_data(table='history', db=2))} records")
+
+# THREADING
+# def main_history(hash_chunks: list, data_history: dict):
+#     with concurrent.futures.ThreadPoolExecutor(max_workers=110) as executor:
+#         for index, hash_chunk in enumerate(hash_chunks):
+#             key = hash_chunk[0]
+#             hash_chunk = hash_chunk[1]
+#
+#             executor.submit(fetch_data_history, data_history=data_history, key=key,
+#                             hash_chunk=hash_chunk)
+#
+#             logging.info(
+#                 f"Submitting chunk {index} with key {key} and {len(hash_chunk)} hash names to executor HISTORY")
+#
+#     logging.info("Start inserted data to HISTORY DB")
+#     print("Start inserted data to HISTORY DB")
+#
+#     add_data_history(table="history", data=data_history)
+#
+#     logging.info(f"Amount elements on all iterations in HISTORY stage: {len(data_history)}")
+#     logging.info(f"Now HISTORY DB is storing: {len(get_data(table='history', db=2))}  records")
+#
+#     print(f"Amount elements on all iterations in HISTORY stage: {len(data_history)}")
+#     print(f"Now HISTORY DB is storing: {len(get_data(table='history', db=2))} records")
+#     print("--------------------------------------------")
